@@ -23,6 +23,17 @@
             font-weight : bold;
             fill : palegreen;
         }
+
+        .map path {
+            stroke : black;
+            stroke-width : "0.7px";
+        }
+
+        .map .annot {
+            font-family : 'Verdana';
+            font-weight : bold;
+            font-size   : 30px;
+        }
     </style>
 </head>
 
@@ -34,6 +45,20 @@
                 width = 1000 - margin,
                 height = 600 - margin;
 
+            var activeMapColor = 'lightBlue',
+                inactiveMapColor = 'white';
+
+            var flAnnotations = false;
+
+            // A set for containing all WorldCup years - will be filled after data is read
+            var years = d3.set();
+
+            // Aggregate data - will be calculated after data is loaded
+            var nested, count_extent, count_max;
+
+            // A d3 radius-scale - will be calculated after data is loaded
+            var count_scale;
+            
             // Create the chart-containing SVG element, directly under BODY
             var svg = d3.select('body')
                         .append('svg')
@@ -48,13 +73,12 @@
 
             // Draw world map. Styling is integrated, so that it can be animated
             var map = svg.selectAll('path')
-                        .data(data.features)
+                        // Use the country name as a data join key
+                        .data(data.features, function(d) { return d.properties.name; })
                         .enter()
                         .append('path')
                         .attr('d', path)
-                        .style('stroke', 'black')
-                        .style('stroke-width', 0.5)
-                        .style('fill', 'lightBlue');
+                        .style('fill', activeMapColor);
 
             // Function to aggregate per-year data, used by d3.nest()
             function aggr_year(leaves) {
@@ -96,27 +120,9 @@
                 };
             } // end function aggr_year(...)
 
-            // Aggregate data
-            var nested = d3.nest().
-                            .key(function(d) { return d.date.getUTCFullYear(); })
-                            .rollup(aggr_year)
-                            .entries(data);
 
             // Plot a bubble per year, size proportional to total attendance
             function plot_bubbles(canvas, data) {
-
-                // Create a radius-scale
-                //>>>
-                var count_extent = d3.extent(nested, function(d) {
-                    return d.values.total;
-                });
-
-                var count_max = count_extent[1];
-
-                var count_scale = d3.scale.sqrt()
-                                    .domain([0, count_max])
-                                    .range([0, 15]);
-                //<<<
 
                 // Draw bubbles
                 canvas.append('g')
@@ -125,8 +131,8 @@
                         // Avoid bigger overlapping smaller ones,
                         // by making them get drawn first
                         .data(nested.sort(function(a, b) {
-                            return b.attendance - a.attendance;
-                        }))
+                            return b.total - a.total;
+                            }), function(d) { return d.key;})
                         .enter()
                         .append('circle')
                         .attr('cx', function(d) { return d.values.x; })
@@ -134,7 +140,8 @@
                         .attr('r', function(d) { return count_scale(d.values.total); });
 
                 // Draw annotations inside each bubble
-                canvas.append('g')
+                if (flAnnotations) {
+                    canvas.append('g')
                         .attr('class', 'year_texts')
                         .selectAll('text')
                         .data(nested)
@@ -143,7 +150,59 @@
                         .attr('x', function(d) { return d.values.x; })
                         .attr('y', function(d) { return d.values.y; })
                         .text(function(d) { return d.key; } );
+                }
             }; // end function plot_bubbles(...)
+
+            // Function to interactively update the thematic map for a given year
+            function update(svg, year) {
+                var filtered = nested.filter(function(d) { 
+                        return +d.key === year;
+                });
+
+                // Update playing countries
+                //>>>
+                var playingCountries = data.features.filter(function(d) {
+                    var cntry = d.properties.name;
+
+                    return (filtered[0].values.teams.indexOf(cntry) != -1); 
+                });
+
+                var countries = svg.selectAll('path')
+                                    .data(playingCountries, function(d) { return d.properties.name; });
+
+                countries.exit().transition().style('fill', inactiveMapColor);
+                countries.transition().style('fill', activeMapColor);
+                //<<<
+
+                // Update circles
+                //>>>
+                var circles = svg.select('.bubbles').selectAll('circle')
+                    .data(filtered, function(d) { return d.key; });
+
+                circles.exit().transition().remove();
+
+                circles.enter()
+                    .append('circle')
+                    .transition()
+                    .attr('cx', function(d) { return d.values.x; })
+                    .attr('cy', function(d) { return d.values.y; })
+                    .attr('r', function(d) { return count_scale(d.values.total); }); 
+                //<<<
+
+                // Update text
+                svg.select('text.annot').remove();
+                var txt = svg.selectAll('text').data([year]).enter().
+                    append('text').
+                    transition().
+                    attr('x', width/2).
+                    attr('y', height).
+                    attr('class', 'annot').
+                    text(year);
+
+                debugger;
+
+            }; // end function update(...)
+
 
             // Read in the geocoded WorldCup data,
             // taking care to parse the custom date format
@@ -155,15 +214,44 @@
                 d.attendance = +d.attendance;
                 d.date = format.parse(d.date);
                 return d;
-            }, function(d) {
-                plot_bubbles(svg, d);
+            }, function(data) {
+                nested = d3.nest()
+                            .key(function(d) { return d.date.getUTCFullYear(); })
+                            .rollup(aggr_year)
+                            .entries(data);
+                
+                // Create a radius-scale
+                //>>>
+                count_extent = d3.extent(nested, function(d) {
+                    return d.values.total;
+                });
+
+                count_max = count_extent[1];
+
+                count_scale = d3.scale.sqrt()
+                                .domain([0, count_max])
+                                .range([0, 15]);
+                //<<<
+                
+                plot_bubbles(svg, data);
+
+                nested.forEach(function(d) { years.add(+d.key); });
+                years = years.values().map(function(d) {return +d;}).sort(); // convert to array
+
+                debugger;
+
+                var idx = -1;
+                var timer = setInterval(function() {
+                    idx++;
+                    if (idx === years.length)
+                        clearInterval(timer);
+                    else {
+                        update(svg, years[idx]);
+                    }
+                }, 1000);
             });
             //<<<
 
-            // Function to interactively update the thematic map for a given year
-            function update(year) {
-
-            } // end function update(...)
 
         }; // end function draw(...)
 
