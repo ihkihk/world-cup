@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+
+<html>
+
+<head>
+    <script src="http://d3js.org/d3.v3.min.js"></script>
+    <script src="http://dimplejs.org/dist/dimple.v2.0.0.min.js"></script>
+
+    <style>
+        .bubbles circle {
+            fill : coral;
+            stroke : black;
+            stroke-width : 0.7;
+            opacity : 0.7;
+        }
+
+        .year_texts text {
+            text-anchor : middle;
+            alignment-baseline : central;
+            font-size : 10px;
+            font-family : 'Verdana';
+            font-weight : bold;
+            fill : palegreen;
+        }
+    </style>
+</head>
+
+<body>
+
+    <script type="text/javascript">
+        function draw(data) {
+            var margin = 75,
+                width = 1000 - margin,
+                height = 600 - margin;
+
+            // Create the chart-containing SVG element, directly under BODY
+            var svg = d3.select('body')
+                        .append('svg')
+                        .attr('width', width + margin)
+                        .attr('height', height + margin)
+                        .append('g')
+                        .attr('class', 'map');
+
+            // Setup map projections
+            var proj = d3.geo.mercator().scale(210).translate([width/2, height/1.5]);
+            var path = d3.geo.path().projection(proj);
+
+            // Draw world map. Styling is integrated, so that it can be animated
+            var map = svg.selectAll('path')
+                        .data(data.features)
+                        .enter()
+                        .append('path')
+                        .attr('d', path)
+                        .style('stroke', 'black')
+                        .style('stroke-width', 0.5)
+                        .style('fill', 'lightBlue');
+
+            // Function to aggregate per-year data, used by d3.nest()
+            function aggr_year(leaves) {
+                // Find the total of all attendances for a given year
+                var total = d3.sum(leaves, function(d) {
+                    return d.attendance;
+                });
+
+                // Find the geo-center of all matches for a given year
+                //>>>
+                var coords = leaves.map(function(d) {
+                    return proj([d.long, d.lat]);
+                });
+
+                var center_x = d3.mean(coords, function(d) {
+                    return d[0];
+                })
+
+                var center_y = d3.mean(coords, function(d) {
+                    return d[1];
+                });
+                //<<<
+
+                // Find all teams participating in a given year
+                //>>>
+                var teams = d3.set();
+
+                leaves.forEach(function(d) {
+                    teams.add(d.team1);
+                    teams.add(d.team2);
+                });
+                //<<<
+
+                return {
+                    'total' : total,
+                    'x'     : center_x,
+                    'y'     : center_y,
+                    'teams' : teams.values()
+                };
+            } // end function aggr_year(...)
+
+            // Aggregate data
+            var nested = d3.nest().
+                            .key(function(d) { return d.date.getUTCFullYear(); })
+                            .rollup(aggr_year)
+                            .entries(data);
+
+            // Plot a bubble per year, size proportional to total attendance
+            function plot_bubbles(canvas, data) {
+
+                // Create a radius-scale
+                //>>>
+                var count_extent = d3.extent(nested, function(d) {
+                    return d.values.total;
+                });
+
+                var count_max = count_extent[1];
+
+                var count_scale = d3.scale.sqrt()
+                                    .domain([0, count_max])
+                                    .range([0, 15]);
+                //<<<
+
+                // Draw bubbles
+                canvas.append('g')
+                        .attr('class', 'bubbles')
+                        .selectAll('circle')
+                        // Avoid bigger overlapping smaller ones,
+                        // by making them get drawn first
+                        .data(nested.sort(function(a, b) {
+                            return b.attendance - a.attendance;
+                        }))
+                        .enter()
+                        .append('circle')
+                        .attr('cx', function(d) { return d.values.x; })
+                        .attr('cy', function(d) { return d.values.y; })
+                        .attr('r', function(d) { return count_scale(d.values.total); });
+
+                // Draw annotations inside each bubble
+                canvas.append('g')
+                        .attr('class', 'year_texts')
+                        .selectAll('text')
+                        .data(nested)
+                        .enter()
+                        .append('text')
+                        .attr('x', function(d) { return d.values.x; })
+                        .attr('y', function(d) { return d.values.y; })
+                        .text(function(d) { return d.key; } );
+            }; // end function plot_bubbles(...)
+
+            // Read in the geocoded WorldCup data,
+            // taking care to parse the custom date format
+            // and convert "attendance" to number
+            //>>>
+            var format = d3.time.format("%d-%m-%Y (%H:%M h)");
+
+            d3.tsv("world_cup_geo.tsv", function(d) {
+                d.attendance = +d.attendance;
+                d.date = format.parse(d.date);
+                return d;
+            }, function(d) {
+                plot_bubbles(svg, d);
+            });
+            //<<<
+
+            // Function to interactively update the thematic map for a given year
+            function update(year) {
+
+            } // end function update(...)
+
+        }; // end function draw(...)
+
+        d3.json("world_countries.json", draw);
+    </script>
+
+</body>
+
+</html>
